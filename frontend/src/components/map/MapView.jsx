@@ -87,10 +87,27 @@ const MODE_STYLES = {
   },
 }
 
-function createLocationIcon({ kind, active }) {
-  const meta = KIND_META[kind] || KIND_META.petroglyph
-  const size = active ? 42 : 34
-  const glow = active ? `0 0 0 1px rgba(255,255,255,0.18), 0 10px 30px ${meta.accent}88` : `0 8px 18px ${meta.accent}4A`
+function resolveTileConfig(theme, mapConfig) {
+  const serverTheme = mapConfig?.themes?.find((item) => item.id === theme)
+  if (serverTheme) {
+    return {
+      url: serverTheme.tile_url,
+      attribution: serverTheme.attribution,
+      tileSize: serverTheme.tile_size || undefined,
+      zoomOffset: serverTheme.zoom_offset ?? undefined,
+      maxZoom: serverTheme.max_zoom || 19,
+    }
+  }
+
+  return TILESETS[theme] || TILESETS.night
+}
+
+function createLocationIcon({ kind, marker, active }) {
+  const markerKind = marker?.kind || kind
+  const meta = KIND_META[markerKind] || KIND_META.petroglyph
+  const accent = marker?.accent || meta.accent
+  const size = active ? (marker?.active_size || 42) : (marker?.default_size || 34)
+  const glow = active ? `0 0 0 1px rgba(255,255,255,0.18), 0 10px 30px ${accent}88` : `0 8px 18px ${accent}4A`
 
   return new L.DivIcon({
     html: `
@@ -103,7 +120,7 @@ function createLocationIcon({ kind, active }) {
         border-radius:999px;
         border:1px solid rgba(255,255,255,0.14);
         background:radial-gradient(circle at 30% 30%, rgba(255,255,255,0.16), rgba(10,7,6,0.96));
-        color:${meta.accent};
+        color:${accent};
         box-shadow:${glow};
         backdrop-filter:blur(6px);
       ">
@@ -173,11 +190,47 @@ function segmentStyle(segment) {
   }
 }
 
-function MapViewportController({ routePositions, selectedPosition, userPosition }) {
+function resolvedSegmentStyle(segment) {
+  if (segment.stroke_color || segment.outline_color) {
+    return {
+      color: segment.stroke_color || '#ff7b37',
+      shadowColor: segment.outline_color || 'rgba(18, 10, 8, 0.86)',
+      dashArray: segment.dash_pattern || undefined,
+      weight: segment.weight || 6,
+      opacity: segment.opacity ?? 0.98,
+    }
+  }
+
+  return segmentStyle(segment)
+}
+
+function MapViewportController({ viewport, routePositions, selectedPosition, userPosition }) {
   const map = useMap()
 
   useEffect(() => {
     const isDesktop = typeof window !== 'undefined' && window.innerWidth >= 1024
+    const viewportTopLeft = isDesktop ? viewport?.desktop_padding_top_left : viewport?.mobile_padding_top_left
+    const viewportBottomRight = isDesktop ? viewport?.desktop_padding_bottom_right : viewport?.mobile_padding_bottom_right
+    const viewportZoom = isDesktop ? viewport?.desktop_zoom : viewport?.mobile_zoom
+
+    if (viewport?.mode === 'fit_route' && Array.isArray(viewport.bounds) && viewport.bounds.length === 2) {
+      map.fitBounds(viewport.bounds, {
+        paddingTopLeft: viewportTopLeft || (isDesktop ? [380, 40] : [24, 132]),
+        paddingBottomRight: viewportBottomRight || (isDesktop ? [40, 40] : [24, 220]),
+        maxZoom: viewport.max_zoom || 13,
+      })
+      return
+    }
+
+    if (viewport?.mode === 'focus_destination' && Array.isArray(viewport.center) && viewport.center.length === 2) {
+      map.setView(viewport.center, viewportZoom || viewport.zoom || (isDesktop ? 11 : 10), { animate: true })
+      return
+    }
+
+    if (viewport?.mode === 'focus_user' && Array.isArray(viewport.center) && viewport.center.length === 2) {
+      map.setView(viewport.center, viewport.zoom || 8, { animate: true })
+      return
+    }
 
     if (routePositions.length > 1) {
       map.fitBounds(routePositions, {
@@ -194,7 +247,7 @@ function MapViewportController({ routePositions, selectedPosition, userPosition 
     }
 
     map.setView(userPosition, 8, { animate: true })
-  }, [map, routePositions, selectedPosition, userPosition])
+  }, [map, routePositions, selectedPosition, userPosition, viewport])
 
   return null
 }
@@ -204,30 +257,37 @@ export function MapView({
   locations,
   selectedLocation,
   routeGeometry,
+  routeSegments,
   routeTransport = 'car',
   onSelectLocation,
   theme = 'night',
+  viewport,
+  mapConfig,
 }) {
-  const tileConfig = TILESETS[theme] || TILESETS.night
+  const tileConfig = resolveTileConfig(theme, mapConfig)
 
-  const routeSegments = useMemo(() => {
-    return getRenderSegments(routeGeometry, routeTransport)
+  const renderedRouteSegments = useMemo(() => {
+    const sourceSegments = Array.isArray(routeSegments) && routeSegments.length > 0
+      ? routeSegments
+      : getRenderSegments(routeGeometry, routeTransport)
+
+    return sourceSegments
       .filter((segment) => Array.isArray(segment.coordinates) && segment.coordinates.length > 1)
       .map((segment, index) => ({
         ...segment,
         id: segment.id || `${segment.kind || 'segment'}-${index}`,
         positions: segment.coordinates.map(([lon, lat]) => [lat, lon]),
-        style: segmentStyle(segment),
+        style: resolvedSegmentStyle(segment),
       }))
-  }, [routeGeometry, routeTransport])
+  }, [routeGeometry, routeSegments, routeTransport])
 
   const routePositions = useMemo(() => {
     const coordinates = routeGeometry?.geometry?.coordinates || []
     if (coordinates.length > 1) {
       return coordinates.map(([lon, lat]) => [lat, lon])
     }
-    return routeSegments.flatMap((segment) => segment.positions)
-  }, [routeGeometry, routeSegments])
+    return renderedRouteSegments.flatMap((segment) => segment.positions)
+  }, [routeGeometry, renderedRouteSegments])
 
   const selectedPosition = Number.isFinite(selectedLocation?.latitude) && Number.isFinite(selectedLocation?.longitude)
     ? [selectedLocation.latitude, selectedLocation.longitude]
@@ -245,6 +305,7 @@ export function MapView({
       <TileLayer {...tileConfig} />
 
       <MapViewportController
+        viewport={viewport}
         routePositions={routePositions}
         selectedPosition={selectedPosition}
         userPosition={userPosition}
@@ -269,7 +330,7 @@ export function MapView({
             <Marker
               key={location.source_id}
               position={[location.latitude, location.longitude]}
-              icon={createLocationIcon({ kind: location.kind, active: isActive })}
+              icon={createLocationIcon({ kind: location.kind, marker: location.map_marker, active: isActive })}
               eventHandlers={{ click: () => onSelectLocation(location) }}
             >
               <Tooltip direction='top' offset={[0, -12]}>
@@ -279,8 +340,8 @@ export function MapView({
           )
         })}
 
-      {routeSegments.length > 0
-        ? routeSegments.map((segment) => (
+      {renderedRouteSegments.length > 0
+        ? renderedRouteSegments.map((segment) => (
           <Fragment key={segment.id}>
             <Polyline
               positions={segment.positions}

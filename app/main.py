@@ -5,7 +5,7 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from app.api import auth, checkin, explorer, route
+from app.api import auth, checkin, explorer, profile, route
 from app.core.config import settings
 from app.core.logging import setup_logging
 
@@ -37,6 +37,7 @@ app.include_router(auth.router)
 app.include_router(route.router)
 app.include_router(checkin.router)
 app.include_router(explorer.router)
+app.include_router(profile.router)
 
 
 @app.on_event('startup')

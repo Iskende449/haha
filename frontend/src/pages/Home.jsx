@@ -10,12 +10,11 @@ import {
   DEFAULT_USER_POSITION,
   LOCALE,
   PANEL_TABS,
-  distanceBetween,
 } from '@/components/home/home-utils'
 import { MapView } from '@/components/map/MapView'
 import { VibeLoader } from '@/components/ui/VibeLoader'
 import { useAuth } from '@/hooks/useAuth'
-import { useExplorerLocation, useExplorerLocations, useExplorerRoute } from '@/hooks/useExplorer'
+import { useExplorerBootstrap, useExplorerLocation, useExplorerLocations, useExplorerRoute } from '@/hooks/useExplorer'
 import { useNavigatorSettings } from '@/hooks/useNavigatorSettings'
 import { useRouteVoice } from '@/hooks/useRouteVoice'
 import { toApiErrorMessage } from '@/services/api'
@@ -38,7 +37,17 @@ export default function Home() {
   const [panelTab, setPanelTab] = useState('place')
 
   const deferredQuery = useDeferredValue(query)
-  const locationsQuery = useExplorerLocations()
+  const bootstrapQuery = useExplorerBootstrap()
+  const locationsQuery = useExplorerLocations({
+    query: deferredQuery.trim() || undefined,
+    kind: kindFilter,
+    terrain: terrainFilter,
+    verified_only: verifiedOnly,
+    sort: 'smart',
+    limit: 48,
+    user_lat: userPosition[0],
+    user_lon: userPosition[1],
+  })
   const routeMutation = useExplorerRoute()
   const { speak, stop, selectedVoiceName, isSupported } = useRouteVoice({
     enabled: settings.voiceEnabled,
@@ -60,46 +69,21 @@ export default function Home() {
     )
   }, [])
 
-  const rankedLocations = useMemo(() => {
-    const normalized = deferredQuery.trim().toLowerCase()
-
-    return allLocations
-      .filter((location) => {
-        if (kindFilter !== 'all' && location.kind !== kindFilter) return false
-        if (terrainFilter !== 'all' && location.terrain !== terrainFilter) return false
-        if (verifiedOnly && location.coordinate_quality !== 'verified') return false
-        if (!normalized) return true
-
-        return `${location.name} ${location.region} ${location.travel_tags?.join(' ') || ''}`
-          .toLowerCase()
-          .includes(normalized)
-      })
-      .map((location) => ({
-        ...location,
-        straightDistanceM: location.latitude && location.longitude
-          ? distanceBetween(userPosition, [location.latitude, location.longitude])
-          : null,
-      }))
-      .sort((a, b) => {
-        if (a.featured !== b.featured) return a.featured ? -1 : 1
-        if (Boolean(a.route_available) !== Boolean(b.route_available)) return a.route_available ? -1 : 1
-        if (a.straightDistanceM && b.straightDistanceM) return a.straightDistanceM - b.straightDistanceM
-        return a.name.localeCompare(b.name)
-      })
-  }, [allLocations, deferredQuery, kindFilter, terrainFilter, userPosition, verifiedOnly])
-
   const effectiveSelectedId =
     selectedId
-    ?? rankedLocations.find((item) => item.route_available)?.source_id
-    ?? rankedLocations[0]?.source_id
+    ?? locationsQuery.data?.recommended_source_id
+    ?? allLocations[0]?.source_id
     ?? null
 
   const selectedSummary = useMemo(
-    () => rankedLocations.find((item) => item.source_id === effectiveSelectedId) || null,
-    [effectiveSelectedId, rankedLocations],
+    () => allLocations.find((item) => item.source_id === effectiveSelectedId) || null,
+    [effectiveSelectedId, allLocations],
   )
 
-  const detailQuery = useExplorerLocation(effectiveSelectedId)
+  const detailQuery = useExplorerLocation(effectiveSelectedId, {
+    user_lat: userPosition[0],
+    user_lon: userPosition[1],
+  })
   const activeLocation = detailQuery.data ? { ...(selectedSummary || {}), ...detailQuery.data } : selectedSummary
   const activeRouteData = routeData?.location?.source_id === effectiveSelectedId ? routeData : null
   const routeLocation = activeRouteData?.location ? { ...(selectedSummary || {}), ...activeRouteData.location } : activeLocation
@@ -109,7 +93,9 @@ export default function Home() {
   }, [settings.voiceEnabled, stop])
 
   useEffect(() => {
-    if (!activeRouteData?.voice_script || !settings.voiceEnabled) return
+    const voicePayload = activeRouteData?.voice_guidance
+    const voiceText = voicePayload?.text || activeRouteData?.voice_script
+    if (!voiceText || !settings.voiceEnabled) return
 
     const currentRouteKey = [
       activeRouteData.location?.source_id,
@@ -119,7 +105,7 @@ export default function Home() {
 
     if (lastSpokenRouteRef.current === currentRouteKey) return
     lastSpokenRouteRef.current = currentRouteKey
-    speak(activeRouteData.voice_script)
+    speak(voiceText, voicePayload)
   }, [activeRouteData, settings.voiceEnabled, speak])
 
   const handleSelectLocation = (location) => {
@@ -157,7 +143,7 @@ export default function Home() {
   }
 
   const routeError = routeMutation.error ? toApiErrorMessage(routeMutation.error) : null
-  const visibleLocations = rankedLocations.slice(0, 18)
+  const visibleLocations = allLocations.slice(0, 18)
 
   if (locationsQuery.isLoading && allLocations.length === 0) {
     return (
@@ -171,12 +157,15 @@ export default function Home() {
     <div className={`theme-${settings.theme} relative min-h-screen overflow-hidden bg-[var(--app-bg)] text-[var(--text-primary)]`}>
       <MapView
         userPosition={userPosition}
-        locations={rankedLocations}
+        locations={allLocations}
         selectedLocation={routeLocation || activeLocation}
         routeGeometry={activeRouteData?.route_geometry}
+        routeSegments={activeRouteData?.render_segments}
         routeTransport={activeRouteData?.transport_mode || transport}
         onSelectLocation={handleSelectLocation}
         theme={settings.theme}
+        viewport={activeRouteData?.viewport}
+        mapConfig={bootstrapQuery.data?.map}
       />
 
       <div className='pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top,rgba(255,216,170,0.16),transparent_34%),linear-gradient(180deg,rgba(9,7,7,0.22)_0%,rgba(9,7,7,0)_36%,rgba(9,7,7,0.78)_100%)]' />

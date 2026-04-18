@@ -115,7 +115,17 @@ export function seasonalityLabel(seasonality) {
   return 'Круглый год'
 }
 
-export function getRenderSegments(routeGeometry, transportMode = 'car') {
+export function getRenderSegments(routeGeometry, transportMode = 'car', serverSegments = null) {
+  if (Array.isArray(serverSegments) && serverSegments.length > 0) {
+    return serverSegments.map((segment, index) => ({
+      id: segment.id || `${segment.kind || 'segment'}-${segment.mode || transportMode}-${index}`,
+      ...segment,
+      distance_m: Number(segment.distance_m) || pathDistance(segment.coordinates),
+      duration_s: Number(segment.duration_s) || 0,
+      transport_context: segment.transport_context || segment.mode || transportMode,
+    }))
+  }
+
   const explicitSegments = routeGeometry?.properties?.render_segments
   if (Array.isArray(explicitSegments) && explicitSegments.length > 0) {
     return explicitSegments.map((segment, index) => ({
@@ -145,8 +155,8 @@ export function getRenderSegments(routeGeometry, transportMode = 'car') {
   ]
 }
 
-export function buildRouteBreakdown(routeGeometry, transportMode = 'car') {
-  const segments = getRenderSegments(routeGeometry, transportMode)
+export function buildRouteBreakdown(routeGeometry, transportMode = 'car', serverSegments = null) {
+  const segments = getRenderSegments(routeGeometry, transportMode, serverSegments)
   const networkDistanceByMode = { car: 0, bike: 0, foot: 0 }
   let connectorDistanceM = 0
   let approximationDistanceM = 0

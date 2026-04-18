@@ -49,8 +49,9 @@ export function RoutePanel({
   isSupported,
 }) {
   const accent = TRANSPORT_ACCENTS[transport] || TRANSPORT_ACCENTS.car
+  const legendItems = routeData?.legend || []
   const routeBreakdown = useMemo(
-    () => buildRouteBreakdown(routeData?.route_geometry, routeData?.transport_mode || transport),
+    () => buildRouteBreakdown(routeData?.route_geometry, routeData?.transport_mode || transport, routeData?.render_segments),
     [routeData, transport],
   )
 
@@ -86,7 +87,7 @@ export function RoutePanel({
               {isSupported ? (
                 <button
                   type='button'
-                  onClick={() => speak(routeData.voice_script)}
+                  onClick={() => speak(routeData.voice_guidance?.text || routeData.voice_script, routeData.voice_guidance || {})}
                   className='rounded-full border border-white/10 bg-white/5 p-2 text-white/84'
                 >
                   {settings.voiceEnabled ? <Volume2 size={16} /> : <VolumeX size={16} />}
@@ -125,23 +126,37 @@ export function RoutePanel({
           ) : null}
 
           <div className='mt-4 grid gap-2'>
-            <LegendRow
-              color={accent}
-              title='Сплошная линия'
-              description={
-                routeData.transport_mode === 'foot'
-                  ? 'Для пешего режима весь найденный путь показывается одной сплошной линией.'
-                  : 'Основной участок маршрута по реальной дороге, тропе или проходимой сети.'
-              }
-            />
-            {routeData.transport_mode !== 'foot' ? (
-              <LegendRow
-                color={routeData.transport_mode === 'bike' ? '#b9f5d9' : '#ffd6b8'}
-                dashed
-                title='Пунктир'
-                description='Дальше текущий режим больше не проходит. Этот кусок нужно пройти пешком.'
-              />
-            ) : null}
+            {legendItems.length > 0 ? (
+              legendItems.map((item) => (
+                <LegendRow
+                  key={item.id}
+                  color={item.stroke_color}
+                  dashed={Boolean(item.dash_pattern)}
+                  title={item.title}
+                  description={item.description}
+                />
+              ))
+            ) : (
+              <>
+                <LegendRow
+                  color={accent}
+                  title='Сплошная линия'
+                  description={
+                    routeData.transport_mode === 'foot'
+                      ? 'Для пешего режима весь найденный путь показывается одной сплошной линией.'
+                      : 'Основной участок маршрута по реальной дороге, тропе или проходимой сети.'
+                  }
+                />
+                {routeData.transport_mode !== 'foot' ? (
+                  <LegendRow
+                    color={routeData.transport_mode === 'bike' ? '#b9f5d9' : '#ffd6b8'}
+                    dashed
+                    title='Пунктир'
+                    description='Дальше текущий режим больше не проходит. Этот кусок нужно пройти пешком.'
+                  />
+                ) : null}
+              </>
+            )}
           </div>
 
           {routeData.steps?.length > 0 ? (

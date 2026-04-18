@@ -24,3 +24,7 @@ class UserResponse(BaseModel):
     experience_points: int
 
     model_config = {'from_attributes': True}
+
+
+class AuthSessionResponse(TokenResponse):
+    user: UserResponse

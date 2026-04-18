@@ -69,6 +69,7 @@ export function PanelTabButton({ tabId, active, onClick }) {
 
 export function LocationCard({ location, active, onClick, variant = 'carousel' }) {
   const Icon = KIND_META[location.kind]?.icon || KIND_META.petroglyph.icon
+  const heroImage = location.media?.hero_image_url || location.image_url
 
   return (
     <button
@@ -85,8 +86,8 @@ export function LocationCard({ location, active, onClick, variant = 'carousel' }
       <div
         className={`bg-cover bg-center ${variant === 'list' ? 'h-28' : 'h-32'}`}
         style={{
-          backgroundImage: location.image_url
-            ? `linear-gradient(180deg, rgba(18,12,10,0.06), rgba(18,12,10,0.86)), url(${location.image_url})`
+          backgroundImage: heroImage
+            ? `linear-gradient(180deg, rgba(18,12,10,0.06), rgba(18,12,10,0.86)), url(${heroImage})`
             : 'linear-gradient(135deg, rgba(228,146,64,0.34), rgba(16,12,11,0.9))',
         }}
       />
@@ -102,7 +103,7 @@ export function LocationCard({ location, active, onClick, variant = 'carousel' }
         <p className='text-sm text-white/64'>{location.region}</p>
         <div className='flex items-center justify-between gap-3 text-xs text-white/56'>
           <span>{location.route_available ? 'Маршрут доступен' : 'Только карточка'}</span>
-          {location.straightDistanceM ? <span>{formatDistance(location.straightDistanceM)}</span> : null}
+          {Number.isFinite(location.distance_from_user_m) ? <span>{formatDistance(location.distance_from_user_m)}</span> : null}
         </div>
         {variant === 'list' && (
           <div className='flex items-center justify-between gap-3 text-xs text-white/44'>

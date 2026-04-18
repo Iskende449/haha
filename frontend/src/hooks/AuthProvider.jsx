@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useMutation } from '@tanstack/react-query'
 
 import { AuthContext } from '@/hooks/auth-context'
@@ -14,15 +14,14 @@ export function AuthProvider({ children }) {
   const loginMutation = useMutation({
     mutationFn: async ({ email, password }) => {
       const { data } = await api.post('/auth/login', { email, password })
-      return { ...data, email }
+      return data
     },
     onSuccess: (data) => {
       localStorage.setItem('heritage_token', data.access_token)
       setToken(data.access_token)
-      if (user?.email !== data.email && data.email) {
-        const nextUser = { ...(user || {}), email: data.email }
-        localStorage.setItem('heritage_user', JSON.stringify(nextUser))
-        setUser(nextUser)
+      if (data.user) {
+        localStorage.setItem('heritage_user', JSON.stringify(data.user))
+        setUser(data.user)
       }
     },
   })
@@ -44,6 +43,31 @@ export function AuthProvider({ children }) {
     setToken(null)
     setUser(null)
   }
+
+  useEffect(() => {
+    if (!token || user) return
+
+    let cancelled = false
+    const loadCurrentUser = async () => {
+      try {
+        const { data } = await api.get('/auth/me')
+        if (cancelled) return
+        localStorage.setItem('heritage_user', JSON.stringify(data))
+        setUser(data)
+      } catch {
+        if (cancelled) return
+        localStorage.removeItem('heritage_token')
+        localStorage.removeItem('heritage_user')
+        setToken(null)
+        setUser(null)
+      }
+    }
+
+    loadCurrentUser()
+    return () => {
+      cancelled = true
+    }
+  }, [token, user])
 
   const value = useMemo(
     () => ({

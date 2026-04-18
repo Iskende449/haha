@@ -58,17 +58,18 @@ export function useRouteVoice({ enabled, locale }) {
     window.speechSynthesis.cancel()
   }, [])
 
-  const speak = useCallback((text) => {
+  const speak = useCallback((text, options = {}) => {
     if (!enabled || !text || typeof window === 'undefined' || !('speechSynthesis' in window)) return
 
     window.speechSynthesis.cancel()
 
     const utterance = new window.SpeechSynthesisUtterance(text)
-    utterance.lang = voice?.lang || (locale === 'ru' ? 'ru-RU' : locale === 'ky' ? 'ky-KG' : 'en-US')
+    const preferredLocale = options.locale || locale
+    utterance.lang = voice?.lang || (preferredLocale === 'ru' ? 'ru-RU' : preferredLocale === 'ky' ? 'ky-KG' : 'en-US')
     utterance.voice = voice
-    utterance.pitch = 0.82
-    utterance.rate = 0.94
-    utterance.volume = 1
+    utterance.pitch = options.pitch ?? 0.82
+    utterance.rate = options.rate ?? 0.94
+    utterance.volume = options.volume ?? 1
 
     window.speechSynthesis.speak(utterance)
   }, [enabled, locale, voice])

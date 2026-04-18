@@ -9,7 +9,13 @@ import httpx
 
 from app.data.cultural_layers import CURATED_CULTURAL_LAYERS, CURATED_LAYER_BY_ID
 from app.data.heritage_snapshot import HERITAGE_SNAPSHOT, SNAPSHOT_BY_ID, SOURCE_MEDIA_URL, SOURCE_SITE_URL
-from app.schemas.explorer_schemas import ExplorerLocationDetail, ExplorerLocationSummary
+from app.schemas.explorer_schemas import ExplorerLocationDetail, ExplorerLocationSummary, LocationSortMode
+from app.services.explorer_experience_service import (
+    build_location_badges,
+    build_marker_preset,
+    build_media_asset,
+    distance_from_user,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -117,6 +123,13 @@ class HeritageCatalogService:
             featured=item.get('featured', False),
             route_available=item.get('latitude') is not None and item.get('longitude') is not None,
             source_url=item.get('source_url') or self._build_source_url(item['source_id']),
+            media=build_media_asset(kind=kind, image_url=item.get('image_url')),
+            map_marker=build_marker_preset(kind),
+            badges=build_location_badges(
+                featured=item.get('featured', False),
+                route_available=item.get('latitude') is not None and item.get('longitude') is not None,
+                coordinate_quality=item.get('coordinate_quality', 'missing'),
+            ),
         )
 
     def _merge_remote_with_snapshot(
@@ -152,6 +165,16 @@ class HeritageCatalogService:
                     featured=snapshot.get('featured', False),
                     route_available=latitude is not None and longitude is not None,
                     source_url=self._build_source_url(source_id),
+                    media=build_media_asset(
+                        kind=kind,
+                        image_url=_absolute_media(remote.get('mainImage')) or snapshot.get('image_url'),
+                    ),
+                    map_marker=build_marker_preset(kind),
+                    badges=build_location_badges(
+                        featured=snapshot.get('featured', False),
+                        route_available=latitude is not None and longitude is not None,
+                        coordinate_quality=snapshot.get('coordinate_quality', 'missing'),
+                    ),
                 )
             )
             seen_ids.add(source_id)
@@ -193,6 +216,111 @@ class HeritageCatalogService:
         }
         return items, source_provider
 
+    def _search_blob(self, item: ExplorerLocationSummary) -> str:
+        return ' '.join(
+            [
+                item.name,
+                item.region,
+                item.summary,
+                *(item.travel_tags or []),
+            ]
+        ).lower()
+
+    def _annotate_summary(
+        self,
+        item: ExplorerLocationSummary,
+        *,
+        user_lat: float | None,
+        user_lon: float | None,
+    ) -> ExplorerLocationSummary:
+        return item.model_copy(
+            update={
+                'distance_from_user_m': distance_from_user(
+                    user_lat=user_lat,
+                    user_lon=user_lon,
+                    target_lat=item.latitude,
+                    target_lon=item.longitude,
+                ),
+                'media': build_media_asset(kind=item.kind, image_url=item.image_url),
+                'map_marker': build_marker_preset(item.kind),
+                'badges': build_location_badges(
+                    featured=item.featured,
+                    route_available=item.route_available,
+                    coordinate_quality=item.coordinate_quality,
+                ),
+            }
+        )
+
+    def _sort_items(
+        self,
+        items: list[ExplorerLocationSummary],
+        *,
+        sort: LocationSortMode,
+    ) -> list[ExplorerLocationSummary]:
+        if sort == 'distance':
+            return sorted(
+                items,
+                key=lambda item: (
+                    item.distance_from_user_m is None,
+                    item.distance_from_user_m if item.distance_from_user_m is not None else float('inf'),
+                    item.name.lower(),
+                ),
+            )
+
+        if sort == 'name':
+            return sorted(items, key=lambda item: item.name.lower())
+
+        return sorted(
+            items,
+            key=lambda item: (
+                not item.featured,
+                not item.route_available,
+                item.distance_from_user_m is None,
+                item.distance_from_user_m if item.distance_from_user_m is not None else float('inf'),
+                item.name.lower(),
+            ),
+        )
+
+    async def query_locations(
+        self,
+        *,
+        query: str | None = None,
+        kind: str = 'all',
+        terrain: str = 'all',
+        verified_only: bool = False,
+        route_ready_only: bool = False,
+        sort: LocationSortMode = 'smart',
+        limit: int = 100,
+        offset: int = 0,
+        user_lat: float | None = None,
+        user_lon: float | None = None,
+    ) -> tuple[list[ExplorerLocationSummary], str, int]:
+        items, source_provider = await self.list_locations()
+        normalized_query = (query or '').strip().lower()
+
+        filtered = items
+        if kind != 'all':
+            filtered = [item for item in filtered if item.kind == kind]
+        if terrain != 'all':
+            filtered = [item for item in filtered if item.terrain == terrain]
+        if verified_only:
+            filtered = [item for item in filtered if item.coordinate_quality == 'verified']
+        if route_ready_only:
+            filtered = [item for item in filtered if item.route_available]
+        if normalized_query:
+            filtered = [item for item in filtered if normalized_query in self._search_blob(item)]
+
+        annotated = [
+            self._annotate_summary(
+                item,
+                user_lat=user_lat,
+                user_lon=user_lon,
+            )
+            for item in filtered
+        ]
+        sorted_items = self._sort_items(annotated, sort=sort)
+        return sorted_items[offset: offset + limit], source_provider, len(sorted_items)
+
     async def _fetch_remote_map_center(self, source_id: int) -> tuple[float, float] | None:
         try:
             payload = await self._fetch_remote_json(f'/petroglyphs/{source_id}/map')
@@ -206,10 +334,37 @@ class HeritageCatalogService:
             return None
         return float(lat), float(lng)
 
-    async def get_location_detail(self, source_id: int) -> ExplorerLocationDetail | None:
+    async def get_location_detail(
+        self,
+        source_id: int,
+        *,
+        user_lat: float | None = None,
+        user_lon: float | None = None,
+    ) -> ExplorerLocationDetail | None:
         cached = self._detail_cache.get(source_id)
         if cached and _is_fresh(cached.get('expires_at')):
-            return cached['item']
+            detail = cached['item']
+            return detail.model_copy(
+                update={
+                    'distance_from_user_m': distance_from_user(
+                        user_lat=user_lat,
+                        user_lon=user_lon,
+                        target_lat=detail.latitude,
+                        target_lon=detail.longitude,
+                    ),
+                    'media': build_media_asset(
+                        kind=detail.kind,
+                        image_url=detail.image_url,
+                        gallery=detail.gallery,
+                    ),
+                    'map_marker': build_marker_preset(detail.kind),
+                    'badges': build_location_badges(
+                        featured=detail.featured,
+                        route_available=detail.route_available,
+                        coordinate_quality=detail.coordinate_quality,
+                    ),
+                }
+            )
 
         items, _ = await self.list_locations()
         base = next((item for item in items if item.source_id == source_id), None)
@@ -221,16 +376,32 @@ class HeritageCatalogService:
             base = self._normalize_snapshot_location(snapshot)
 
         detail = ExplorerLocationDetail(
-            **base.model_dump(),
+            **base.model_dump(exclude={'media', 'map_marker', 'badges'}),
             gallery=[base.image_url] if base.image_url else [],
             archaeological_description=base.summary,
             ethnographic_description=None,
             source_provider='snapshot',
+            media=build_media_asset(kind=base.kind, image_url=base.image_url, gallery=[base.image_url] if base.image_url else []),
+            map_marker=build_marker_preset(base.kind),
+            badges=build_location_badges(
+                featured=base.featured,
+                route_available=base.route_available,
+                coordinate_quality=base.coordinate_quality,
+            ),
         )
 
         if base.kind != 'petroglyph':
             self._detail_cache[source_id] = {'expires_at': _expires_at(DETAIL_TTL), 'item': detail}
-            return detail
+            return detail.model_copy(
+                update={
+                    'distance_from_user_m': distance_from_user(
+                        user_lat=user_lat,
+                        user_lon=user_lon,
+                        target_lat=detail.latitude,
+                        target_lon=detail.longitude,
+                    ),
+                }
+            )
 
         try:
             payload = await self._fetch_remote_json(f'/petroglyphs/{source_id}/')
@@ -268,12 +439,47 @@ class HeritageCatalogService:
                 archaeological_description=archaeology or detail.archaeological_description,
                 ethnographic_description=ethnography or detail.ethnographic_description,
                 source_provider='remote+snapshot',
+                media=build_media_asset(
+                    kind=detail.kind,
+                    image_url=(gallery[0] if gallery else detail.image_url),
+                    gallery=gallery or detail.gallery,
+                ),
+                map_marker=build_marker_preset(detail.kind),
+                badges=build_location_badges(
+                    featured=detail.featured,
+                    route_available=coords[0] is not None and coords[1] is not None,
+                    coordinate_quality=(
+                        detail.coordinate_quality
+                        if detail.coordinate_quality != 'missing' or coords[0] is None
+                        else 'verified'
+                    ),
+                ),
             )
         except Exception as exc:  # noqa: BLE001
             logger.warning('Heritage remote detail fetch failed for %s: %s', source_id, exc)
 
         self._detail_cache[source_id] = {'expires_at': _expires_at(DETAIL_TTL), 'item': detail}
-        return detail
+        return detail.model_copy(
+            update={
+                'distance_from_user_m': distance_from_user(
+                    user_lat=user_lat,
+                    user_lon=user_lon,
+                    target_lat=detail.latitude,
+                    target_lon=detail.longitude,
+                ),
+                'media': build_media_asset(
+                    kind=detail.kind,
+                    image_url=detail.image_url,
+                    gallery=detail.gallery,
+                ),
+                'map_marker': build_marker_preset(detail.kind),
+                'badges': build_location_badges(
+                    featured=detail.featured,
+                    route_available=detail.route_available,
+                    coordinate_quality=detail.coordinate_quality,
+                ),
+            }
+        )
 
 
 heritage_catalog_service = HeritageCatalogService()

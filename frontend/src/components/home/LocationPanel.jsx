@@ -11,14 +11,15 @@ export function LocationPanel({ activeLocation }) {
   }
 
   const selectedKind = KIND_META[activeLocation.kind || 'petroglyph'] || KIND_META.petroglyph
+  const heroImage = activeLocation.media?.hero_image_url || activeLocation.image_url
 
   return (
     <div className='overflow-hidden rounded-[30px] border border-white/10 bg-[rgba(255,255,255,0.04)]'>
       <div
         className='h-40 bg-cover bg-center'
         style={{
-          backgroundImage: activeLocation.image_url
-            ? `linear-gradient(180deg, rgba(16,10,9,0.16), rgba(16,10,9,0.86)), url(${activeLocation.image_url})`
+          backgroundImage: heroImage
+            ? `linear-gradient(180deg, rgba(16,10,9,0.16), rgba(16,10,9,0.86)), url(${heroImage})`
             : 'linear-gradient(135deg, rgba(228,146,64,0.36), rgba(15,11,10,0.92))',
         }}
       />
@@ -58,7 +59,7 @@ export function LocationPanel({ activeLocation }) {
         <div className='grid grid-cols-2 gap-2'>
           <MetricCard
             label='От вас'
-            value={activeLocation.straightDistanceM ? formatDistance(activeLocation.straightDistanceM) : '...'}
+            value={Number.isFinite(activeLocation.distance_from_user_m) ? formatDistance(activeLocation.distance_from_user_m) : '...'}
           />
           <MetricCard
             label='Маршрут'
